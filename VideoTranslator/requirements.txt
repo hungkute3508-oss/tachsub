@@ -1,0 +1,9 @@
+customtkinter
+playwright
+opencv-python
+Pillow
+av
+psutil
+paddlepaddle>=3.0.0
+paddleocr>=3.0.0
+opencc-python-reimplemented>=0.1.7

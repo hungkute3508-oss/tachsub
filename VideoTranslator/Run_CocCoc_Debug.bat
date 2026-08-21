@@ -1,0 +1,9 @@
+@echo off
+echo Dang tat cac cua so Coc Coc chay ngam...
+taskkill /F /IM browser.exe /T >nul 2>&1
+taskkill /F /IM coccoc.exe /T >nul 2>&1
+echo Dang cho he thong dong han tien trinh...
+timeout /t 2 /nobreak >nul
+echo Dang mo Coc Coc o che do Debug (Port 9223)...
+start "" "C:\Program Files\CocCoc\Browser\Application\browser.exe" --remote-debugging-port=9223
+exit
