@@ -108,7 +108,13 @@ class VideoProcessor:
         chinese_count = len(re.findall(r"[\u3400-\u9fff]", compact))
         return chinese_count >= 1 and (chinese_count / len(compact)) >= 0.35
 
-    def _orient_frame(self, frame, rotation):
+    def _orient_frame(self, frame, rotation=0):
+        if rotation == 90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        elif rotation == 180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif rotation == 270:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
         if self.orientation == "portrait" and frame.shape[1] > frame.shape[0]:
             return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
         if self.orientation == "landscape" and frame.shape[0] > frame.shape[1]:

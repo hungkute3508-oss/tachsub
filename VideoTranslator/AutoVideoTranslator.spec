@@ -25,7 +25,9 @@ hiddenimports = [
     'requests',
     'video_processor',
     'ocr_worker',
+    'ai_automation',
     'chatgpt_automation',
+    'gemini_automation',
 ]
 
 for pkg in [

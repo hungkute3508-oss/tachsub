@@ -16,20 +16,18 @@ if sys.stderr is None:
 
 import shutil
 import threading
+import subprocess
+import json
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 import re
-import json
-import subprocess
 import multiprocessing
-import tempfile
 import cv2
 from PIL import Image, ImageTk
 
 from video_processor import VideoProcessor
-from ocr_worker import run_ocr
-from chatgpt_automation import ChatGPTAutomator
+from ai_automation import ChatGPTAutomator, GeminiAutomator
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -45,9 +43,9 @@ class App(ctk.CTk):
         self.is_running = False
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
-        self.ocr_process = None
         self.subtitle_region = None
         self.video_orientation = ctk.StringVar(value="Tu dong")
+        self.ai_service = ctk.StringVar(value="ChatGPT")
         self.roi_status = ctk.StringVar(value="Vung sub: chua chon (mac dinh 30% phia duoi)")
         
         self.create_widgets()
@@ -58,7 +56,7 @@ class App(ctk.CTk):
         frame_dir.pack(pady=10, padx=20, fill="x")
         ctk.CTkButton(frame_dir, text="Xem truoc va khoanh sub", command=self.preview_subtitle_region, width=170).grid(row=0, column=3, padx=(0, 10), pady=10)
         ctk.CTkOptionMenu(frame_dir, variable=self.video_orientation, values=["Tu dong", "Doc", "Ngang"], width=115).grid(row=1, column=3, padx=(0, 10), pady=10)
-        ctk.CTkLabel(frame_dir, textvariable=self.roi_status, text_color="#67c587").grid(row=3, column=0, columnspan=4, pady=(0, 8), sticky="w", padx=10)
+        ctk.CTkButton(frame_dir, text="Đặt lại vùng sub", command=self.reset_subtitle_region, width=115, fg_color="#555555").grid(row=2, column=3, padx=(0, 10), pady=8)
         
         ctk.CTkLabel(frame_dir, text="Thư mục chứa video gốc:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
         ctk.CTkEntry(frame_dir, textvariable=self.input_dir, width=400).grid(row=0, column=1, padx=10, pady=10)
@@ -68,15 +66,30 @@ class App(ctk.CTk):
         ctk.CTkEntry(frame_dir, textvariable=self.output_dir, width=400).grid(row=1, column=1, padx=10, pady=10)
         ctk.CTkButton(frame_dir, text="Chọn", command=self.select_output, width=80).grid(row=1, column=2, padx=10, pady=10)
 
+        # Chọn AI dịch
+        ctk.CTkLabel(frame_dir, text="Dịch kịch bản bằng:").grid(row=2, column=0, padx=10, pady=8, sticky="w")
+        self.ai_segmented = ctk.CTkSegmentedButton(
+            frame_dir,
+            values=["ChatGPT", "Gemini"],
+            variable=self.ai_service,
+            command=self.on_ai_service_changed,
+            width=220
+        )
+        self.ai_segmented.grid(row=2, column=1, padx=10, pady=8, sticky="w")
+
         # Hướng dẫn mở Cốc Cốc
-        help_text = 'LƯU Ý: Phải mở Cốc Cốc bằng lệnh:\n"C:\\Program Files\\CocCoc\\Browser\\Application\\browser.exe" --remote-debugging-port=9223\nvà mở sẵn tab ChatGPT!'
-        ctk.CTkLabel(frame_dir, text=help_text, text_color="orange").grid(row=2, column=0, columnspan=3, pady=5)
+        self.lbl_help = ctk.CTkLabel(frame_dir, text="", text_color="orange")
+        self.lbl_help.grid(row=3, column=0, columnspan=4, pady=4, sticky="w", padx=10)
+        self.update_help_text()
+
+        ctk.CTkLabel(frame_dir, textvariable=self.roi_status, text_color="#67c587").grid(row=4, column=0, columnspan=4, pady=(0, 8), sticky="w", padx=10)
 
         # 2. Khung Prompt
         frame_prompt = ctk.CTkFrame(self)
         frame_prompt.pack(pady=10, padx=20, fill="both", expand=True)
         
-        ctk.CTkLabel(frame_prompt, text="Prompt ChatGPT:").pack(anchor="w", padx=10, pady=(10, 0))
+        self.lbl_prompt = ctk.CTkLabel(frame_prompt, text=f"Prompt dịch ({self.ai_service.get()}):")
+        self.lbl_prompt.pack(anchor="w", padx=10, pady=(10, 0))
         self.prompt_text = ctk.CTkTextbox(frame_prompt, height=100)
         self.prompt_text.pack(padx=10, pady=10, fill="x")
         default_prompt = (
@@ -114,6 +127,18 @@ class App(ctk.CTk):
         self.btn_stop = ctk.CTkButton(frame_control, text="DỪNG", command=self.stop_process, fg_color="red", hover_color="darkred", state="disabled")
         self.btn_stop.pack(side="right", padx=10, pady=10, expand=True, fill="x")
 
+    def update_help_text(self):
+        ai_name = self.ai_service.get()
+        help_text = f'LƯU Ý: Phải mở Cốc Cốc bằng "Run_CocCoc_Debug.bat" (Port 9223) và mở sẵn tab {ai_name}!'
+        if hasattr(self, 'lbl_help'):
+            self.lbl_help.configure(text=help_text)
+
+    def on_ai_service_changed(self, value=None):
+        ai_name = self.ai_service.get()
+        if hasattr(self, 'lbl_prompt'):
+            self.lbl_prompt.configure(text=f"Prompt dịch ({ai_name}):")
+        self.update_help_text()
+
     def select_input(self):
         d = filedialog.askdirectory()
         if d: self.input_dir.set(d)
@@ -122,165 +147,208 @@ class App(ctk.CTk):
         d = filedialog.askdirectory()
         if d: self.output_dir.set(d)
 
+    def reset_subtitle_region(self):
+        self.subtitle_region = None
+        self.roi_status.set("Vung sub: chua chon (mac dinh 30% phia duoi)")
+
     def preview_subtitle_region(self):
-        initial_dir = self.input_dir.get() if os.path.isdir(self.input_dir.get()) else os.getcwd()
-        video_path = filedialog.askopenfilename(title="Chon video de khoanh vung phu de", initialdir=initial_dir, filetypes=[("Video", "*.mp4 *.mkv *.avi *.mov")])
-        if not video_path:
-            return
-        capture = cv2.VideoCapture(video_path)
-        if not capture.isOpened():
-            messagebox.showerror("Loi", "Khong the mo video da chon.")
-            return
-        fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
-        duration = max(0.1, (capture.get(cv2.CAP_PROP_FRAME_COUNT) or 1) / fps)
-        rotation = self._get_video_rotation(video_path, capture)
-        capture.release()
-        window = ctk.CTkToplevel(self)
-        window.title("Khoanh vung phu de")
-        window.geometry("860x720")
-        window.transient(self)
-        ctk.CTkLabel(window, text="Chon khung co phu de, keo chuot de khoanh vung can OCR.").pack(pady=(12, 4))
-        video_info = ctk.CTkLabel(window, text="Dang doc thong tin video...", text_color="#a8b3bf")
-        video_info.pack(pady=(0, 4))
-        canvas_width, canvas_height = 800, 500
-        canvas = ctk.CTkCanvas(window, width=canvas_width, height=canvas_height, bg="black", highlightthickness=0)
-        canvas.pack(padx=20, pady=8)
-        time_label = ctk.CTkLabel(window, text="0.0s")
-        time_label.pack()
-        slider = ctk.CTkSlider(window, from_=0, to=duration)
-        slider.pack(fill="x", padx=30, pady=(4, 12))
-        preview_capture = cv2.VideoCapture(video_path)
-        state = {"start": None, "rectangle": None, "selection": None, "image_box": None, "action": None, "original": None, "preview_after": None}
-
-        def show_frame(value=0):
-            preview_capture.set(cv2.CAP_PROP_POS_MSEC, float(value) * 1000)
-            ok, frame = preview_capture.read()
-            if not ok:
-                return
-            if rotation == 90:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            elif rotation == 180:
-                frame = cv2.rotate(frame, cv2.ROTATE_180)
-            elif rotation == 270:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            if self.video_orientation.get() == "Doc" and frame.shape[1] > frame.shape[0]:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            elif self.video_orientation.get() == "Ngang" and frame.shape[0] > frame.shape[1]:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            source_width, source_height = image.size
-            scale = min(canvas_width / source_width, canvas_height / source_height)
-            display_width = max(1, round(source_width * scale))
-            display_height = max(1, round(source_height * scale))
-            image = image.resize((display_width, display_height), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(image)
-            canvas.delete("all")
-            offset_x = (canvas_width - display_width) // 2
-            offset_y = (canvas_height - display_height) // 2
-            canvas.create_image(offset_x, offset_y, anchor="nw", image=photo)
-            canvas.image = photo
-            state["rectangle"] = None
-            state["image_box"] = (offset_x, offset_y, display_width, display_height)
-            orientation = "video doc" if source_height > source_width else "video ngang"
-            quality = f"{source_height}p" if source_height >= source_width else f"{source_width}p"
-            video_info.configure(text=f"{source_width} x {source_height} px | {orientation} | {quality} | {fps:.2f} FPS | {duration:.1f}s")
-            time_label.configure(text=f"{float(value):.1f}s")
-
-        def request_frame(value):
-            # Slider emits many events per second; only decode after the drag pauses.
-            if state["preview_after"]:
-                window.after_cancel(state["preview_after"])
-            state["preview_after"] = window.after(80, lambda: show_frame(value))
-
-        def close_preview():
-            preview_capture.release()
-            window.destroy()
-
-        def clamp_point(event):
-            offset_x, offset_y, display_width, display_height = state["image_box"]
-            return (
-                min(max(event.x, offset_x), offset_x + display_width),
-                min(max(event.y, offset_y), offset_y + display_height),
+        try:
+            initial_dir = self.input_dir.get() if os.path.isdir(self.input_dir.get()) else os.getcwd()
+            video_path = filedialog.askopenfilename(
+                title="Chon video de khoanh vung phu de",
+                initialdir=initial_dir,
+                filetypes=[("Video", "*.mp4 *.mkv *.avi *.mov")]
             )
-
-        def save_selection(coords):
-            offset_x, offset_y, width, height = state["image_box"]
-            x1, y1, x2, y2 = coords
-            left, right = sorted(((x1 - offset_x) / width, (x2 - offset_x) / width))
-            top, bottom = sorted(((y1 - offset_y) / height, (y2 - offset_y) / height))
-            state["selection"] = (left, top, right, bottom)
-
-        def on_press(event):
-            if not state["image_box"]:
+            if not video_path:
                 return
-            x, y = clamp_point(event)
-            state["start"] = (x, y)
-            state["action"] = "new"
-            state["original"] = None
-            if state["rectangle"]:
-                x1, y1, x2, y2 = canvas.coords(state["rectangle"])
-                margin = 12
-                if x1 - margin <= x <= x2 + margin and y1 - margin <= y <= y2 + margin:
-                    horizontal = "left" if abs(x - x1) < margin else "right" if abs(x - x2) < margin else ""
-                    vertical = "top" if abs(y - y1) < margin else "bottom" if abs(y - y2) < margin else ""
-                    state["action"] = horizontal + vertical or "move"
-                    state["original"] = (x1, y1, x2, y2)
+            capture = cv2.VideoCapture(video_path)
+            if not capture.isOpened():
+                messagebox.showerror("Lỗi", "Không thể mở video đã chọn.")
+                return
+            fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+            duration = max(0.1, (capture.get(cv2.CAP_PROP_FRAME_COUNT) or 1) / fps)
+            rotation = self._get_video_rotation(video_path, capture)
+            capture.release()
+            window = ctk.CTkToplevel(self)
+            window.title("Khoanh vung phu de tieng Trung")
+            window.geometry("860x730")
+            window.transient(self)
+            ctk.CTkLabel(window, text="Keo thanh truot toi doan co phu de, dung chuot keo khoanh vung can OCR.").pack(pady=(10, 2))
+            video_info = ctk.CTkLabel(window, text="Dang doc thong tin video...", text_color="#a8b3bf")
+            video_info.pack(pady=(0, 4))
+            canvas_width, canvas_height = 800, 500
+            canvas = ctk.CTkCanvas(window, width=canvas_width, height=canvas_height, bg="black", highlightthickness=0)
+            canvas.pack(padx=20, pady=6)
+            time_label = ctk.CTkLabel(window, text="0.0s")
+            time_label.pack()
+            slider = ctk.CTkSlider(window, from_=0, to=duration)
+            slider.pack(fill="x", padx=30, pady=(2, 10))
+            preview_capture = cv2.VideoCapture(video_path)
+            state = {
+                "start": None,
+                "rectangle": None,
+                "selection": self.subtitle_region,
+                "image_box": None,
+                "action": None,
+                "original": None,
+                "preview_after": None
+            }
+
+            def show_frame(value=0):
+                val_sec = float(value)
+                if val_sec > 0:
+                    preview_capture.set(cv2.CAP_PROP_POS_MSEC, val_sec * 1000)
+                ok, frame = preview_capture.read()
+                if not ok and val_sec == 0:
+                    preview_capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ok, frame = preview_capture.read()
+                if not ok:
                     return
-            state["rectangle"] = canvas.create_rectangle(x, y, x, y, outline="#37d67a", width=3)
+                if rotation == 90:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                elif rotation == 180:
+                    frame = cv2.rotate(frame, cv2.ROTATE_180)
+                elif rotation == 270:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                if self.video_orientation.get() == "Doc" and frame.shape[1] > frame.shape[0]:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                elif self.video_orientation.get() == "Ngang" and frame.shape[0] > frame.shape[1]:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                source_width, source_height = image.size
+                scale = min(canvas_width / source_width, canvas_height / source_height)
+                display_width = max(1, round(source_width * scale))
+                display_height = max(1, round(source_height * scale))
+                image = image.resize((display_width, display_height), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(image)
+                canvas.delete("all")
+                offset_x = (canvas_width - display_width) // 2
+                offset_y = (canvas_height - display_height) // 2
+                canvas.create_image(offset_x, offset_y, anchor="nw", image=photo)
+                canvas.image = photo
+                state["image_box"] = (offset_x, offset_y, display_width, display_height)
 
-        def on_drag(event):
-            if not state["start"] or not state["rectangle"]:
-                return
-            x, y = clamp_point(event)
-            action = state["action"]
-            if action == "new":
-                canvas.coords(state["rectangle"], *state["start"], x, y)
-                return
-            x1, y1, x2, y2 = state["original"]
-            dx, dy = x - state["start"][0], y - state["start"][1]
-            offset_x, offset_y, width, height = state["image_box"]
-            if action == "move":
-                dx = min(max(dx, offset_x - x1), offset_x + width - x2)
-                dy = min(max(dy, offset_y - y1), offset_y + height - y2)
-                canvas.coords(state["rectangle"], x1 + dx, y1 + dy, x2 + dx, y2 + dy)
-            else:
-                if "left" in action: x1 = min(x, x2 - 12)
-                if "right" in action: x2 = max(x, x1 + 12)
-                if "top" in action: y1 = min(y, y2 - 12)
-                if "bottom" in action: y2 = max(y, y1 + 12)
-                canvas.coords(state["rectangle"], x1, y1, x2, y2)
+                # Neu da co vung chon thi ve lai khung xanh
+                if state["selection"]:
+                    l, t, r, b = state["selection"]
+                    rx1 = offset_x + l * display_width
+                    ry1 = offset_y + t * display_height
+                    rx2 = offset_x + r * display_width
+                    ry2 = offset_y + b * display_height
+                    state["rectangle"] = canvas.create_rectangle(rx1, ry1, rx2, ry2, outline="#37d67a", width=3)
+                else:
+                    state["rectangle"] = None
 
-        def on_release(event):
-            if not state["start"]:
-                return
-            save_selection(canvas.coords(state["rectangle"]))
-            state["start"] = None
-            state["action"] = None
-            state["original"] = None
+                orientation = "video doc" if source_height > source_width else "video ngang"
+                quality = f"{source_height}p" if source_height >= source_width else f"{source_width}p"
+                video_info.configure(text=f"{source_width} x {source_height} px | {orientation} | {quality} | {fps:.2f} FPS | {duration:.1f}s")
+                time_label.configure(text=f"{val_sec:.1f}s")
 
-        def apply_selection():
-            region = state["selection"]
-            if not region or region[2] - region[0] < 0.02 or region[3] - region[1] < 0.02:
-                messagebox.showwarning("Chua chon vung", "Hay keo chuot khoanh vung phu de truoc.", parent=window)
-                return
-            self.subtitle_region = region
-            self.roi_status.set("Vung sub da chon - se ap dung cho toan bo video trong thu muc")
-            close_preview()
+            def request_frame(value):
+                if state["preview_after"]:
+                    window.after_cancel(state["preview_after"])
+                state["preview_after"] = window.after(80, lambda: show_frame(value))
 
-        slider.configure(command=request_frame)
-        canvas.bind("<ButtonPress-1>", on_press)
-        canvas.bind("<B1-Motion>", on_drag)
-        canvas.bind("<ButtonRelease-1>", on_release)
-        ctk.CTkButton(window, text="Ap dung vung da khoanh", command=apply_selection, fg_color="green").pack(pady=8)
-        window.protocol("WM_DELETE_WINDOW", close_preview)
-        show_frame(0)
+            def close_preview():
+                preview_capture.release()
+                window.destroy()
+
+            def clamp_point(event):
+                offset_x, offset_y, display_width, display_height = state["image_box"]
+                return (
+                    min(max(event.x, offset_x), offset_x + display_width),
+                    min(max(event.y, offset_y), offset_y + display_height),
+                )
+
+            def save_selection(coords):
+                offset_x, offset_y, width, height = state["image_box"]
+                x1, y1, x2, y2 = coords
+                left, right = sorted(((x1 - offset_x) / width, (x2 - offset_x) / width))
+                top, bottom = sorted(((y1 - offset_y) / height, (y2 - offset_y) / height))
+                state["selection"] = (left, top, right, bottom)
+
+            def on_press(event):
+                if not state["image_box"]:
+                    return
+                x, y = clamp_point(event)
+                state["start"] = (x, y)
+                state["action"] = "new"
+                state["original"] = None
+                if state["rectangle"]:
+                    x1, y1, x2, y2 = canvas.coords(state["rectangle"])
+                    margin = 12
+                    if x1 - margin <= x <= x2 + margin and y1 - margin <= y <= y2 + margin:
+                        horizontal = "left" if abs(x - x1) < margin else "right" if abs(x - x2) < margin else ""
+                        vertical = "top" if abs(y - y1) < margin else "bottom" if abs(y - y2) < margin else ""
+                        state["action"] = horizontal + vertical or "move"
+                        state["original"] = (x1, y1, x2, y2)
+                        return
+                state["rectangle"] = canvas.create_rectangle(x, y, x, y, outline="#37d67a", width=3)
+
+            def on_drag(event):
+                if not state["start"] or not state["rectangle"]:
+                    return
+                x, y = clamp_point(event)
+                action = state["action"]
+                if action == "new":
+                    canvas.coords(state["rectangle"], *state["start"], x, y)
+                    return
+                x1, y1, x2, y2 = state["original"]
+                dx, dy = x - state["start"][0], y - state["start"][1]
+                offset_x, offset_y, width, height = state["image_box"]
+                if action == "move":
+                    dx = min(max(dx, offset_x - x1), offset_x + width - x2)
+                    dy = min(max(dy, offset_y - y1), offset_y + height - y2)
+                    canvas.coords(state["rectangle"], x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+                else:
+                    if "left" in action: x1 = min(x, x2 - 12)
+                    if "right" in action: x2 = max(x, x1 + 12)
+                    if "top" in action: y1 = min(y, y2 - 12)
+                    if "bottom" in action: y2 = max(y, y1 + 12)
+                    canvas.coords(state["rectangle"], x1, y1, x2, y2)
+
+            def on_release(event):
+                if not state["start"]:
+                    return
+                save_selection(canvas.coords(state["rectangle"]))
+                state["start"] = None
+                state["action"] = None
+                state["original"] = None
+
+            def apply_selection():
+                region = state["selection"]
+                if not region or region[2] - region[0] < 0.02 or region[3] - region[1] < 0.02:
+                    messagebox.showwarning("Chua chon vung", "Hay keo chuot khoanh vung phu de truoc.", parent=window)
+                    return
+                self.subtitle_region = region
+                w_pct = int(round((region[2] - region[0]) * 100))
+                h_pct = int(round((region[3] - region[1]) * 100))
+                top_pct = int(round(region[1] * 100))
+                self.roi_status.set(f"Vung sub da chon: doc tu {top_pct}% ({w_pct}%x{h_pct}%) - se ap dung cho toan bo video")
+                close_preview()
+
+            slider.configure(command=request_frame)
+            canvas.bind("<ButtonPress-1>", on_press)
+            canvas.bind("<B1-Motion>", on_drag)
+            canvas.bind("<ButtonRelease-1>", on_release)
+            btn_frame = ctk.CTkFrame(window, fg_color="transparent")
+            btn_frame.pack(pady=8)
+            ctk.CTkButton(btn_frame, text="Ap dung vung da khoanh", command=apply_selection, fg_color="green", width=180).pack(side="left", padx=10)
+            ctk.CTkButton(btn_frame, text="Dong", command=close_preview, fg_color="#666666", width=100).pack(side="left", padx=10)
+            window.protocol("WM_DELETE_WINDOW", close_preview)
+            show_frame(0)
+        except Exception as e:
+            messagebox.showerror("Loi xem truoc", f"Khong the mo xem truoc video:\n{str(e)}")
 
     @staticmethod
     def _get_video_rotation(video_path, capture):
         """Return the orientation embedded in the video, never a user-chosen rotation."""
-        rotation = int(capture.get(getattr(cv2, "CAP_PROP_ORIENTATION_META", 48)) or 0) % 360
-        if rotation:
-            return rotation
+        try:
+            rotation = int(capture.get(getattr(cv2, "CAP_PROP_ORIENTATION_META", 48)) or 0) % 360
+            if rotation:
+                return rotation
+        except Exception:
+            pass
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream_tags=rotate:stream_side_data", "-of", "json", video_path],
@@ -294,7 +362,7 @@ class App(ctk.CTk):
             for item in stream.get("side_data_list", []):
                 if "rotation" in item:
                     return int(float(item["rotation"])) % 360
-        except (FileNotFoundError, ValueError, KeyError, IndexError, json.JSONDecodeError):
+        except Exception:
             pass
         return 0
         
@@ -397,7 +465,12 @@ class App(ctk.CTk):
             self.log(f"Tìm thấy {total} video cần xử lý.")
             
             orientation = {"Tu dong": "auto", "Doc": "portrait", "Ngang": "landscape"}[self.video_orientation.get()]
-            chatgpt = ChatGPTAutomator()
+            ai_choice = self.ai_service.get()
+            if ai_choice == "Gemini":
+                ai_automator = GeminiAutomator()
+            else:
+                ai_automator = ChatGPTAutomator()
+            
             processor = VideoProcessor(subtitle_region=self.subtitle_region, orientation=orientation)
             
             for i, video_file in enumerate(videos):
@@ -432,7 +505,7 @@ class App(ctk.CTk):
                 # Bước 2: Dịch qua Cốc Cốc
                 self.wait_if_paused()
                 if self.stop_event.is_set(): break
-                translated_srt, err = chatgpt.translate_srt(prompt, srt_content, self.log)
+                translated_srt, err = ai_automator.translate_srt(prompt, srt_content, self.log)
                 if err:
                     self.log(f"Lỗi dịch thuật: {err}")
                     continue
@@ -483,8 +556,8 @@ class App(ctk.CTk):
 
                 self.after(0, lambda v=(i + 1) / total: self.progress.set(v))
                 
-            if hasattr(chatgpt, 'disconnect'):
-                chatgpt.disconnect()
+            if hasattr(ai_automator, 'disconnect'):
+                ai_automator.disconnect()
             self.log("\nHOÀN THÀNH TOÀN BỘ TIẾN TRÌNH!")
             
         except Exception as e:

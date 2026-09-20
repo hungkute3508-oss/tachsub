@@ -1,0 +1,20 @@
+# Python virtual environments & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv*/
+env/
+
+# Build artifacts & packages
+build/
+dist/
+*.spec.bak
+
+# Binary installers & executables
+*.exe
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
